@@ -9,7 +9,7 @@ This is a shortcut into mido's **ABOUT** mode.
 
 ## Execution
 
-1. Read the main orchestrator skill at `skills/mido/SKILL.md` (relative to this plugin).
+1. Read the main orchestrator skill at `skills/orchestrator/SKILL.md` (relative to this plugin).
 2. Execute the **About Flow** exactly as documented there — context-aware, project-specific if initialized.
 3. All rules from the main skill apply in full.
 

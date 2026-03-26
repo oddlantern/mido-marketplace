@@ -9,7 +9,7 @@ This is a shortcut into mido's **INIT** mode.
 
 ## Execution
 
-1. Read the main orchestrator skill at `skills/mido/SKILL.md` (relative to this plugin).
+1. Read the main orchestrator skill at `skills/orchestrator/SKILL.md` (relative to this plugin).
 2. Execute the **INIT** flow exactly as documented there — no steps skipped.
 3. All rules, checkpoints, and post-init resumption logic from the main skill apply in full.
 
