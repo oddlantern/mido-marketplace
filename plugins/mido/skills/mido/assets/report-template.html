@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{title}} — Mido Report</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface-2: #242833;
+      --border: #2e3342;
+      --text: #e4e6ed;
+      --text-muted: #8b90a0;
+      --accent: #6c8cff;
+      --accent-dim: #3d5199;
+      --green: #4ade80;
+      --green-dim: #1a3d2a;
+      --red: #f87171;
+      --red-dim: #3d1a1a;
+      --yellow: #fbbf24;
+      --yellow-dim: #3d351a;
+      --orange: #fb923c;
+      --blue: #60a5fa;
+      --purple: #a78bfa;
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .report-header {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .report-header h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin-bottom: 0.25rem;
+      background: linear-gradient(135deg, var(--accent), var(--purple));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .report-meta {
+      display: flex;
+      gap: 1.5rem;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      flex-wrap: wrap;
+    }
+
+    .report-meta span { display: flex; align-items: center; gap: 0.3rem; }
+
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .section h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .section h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 1rem 0 0.5rem;
+      color: var(--text-muted);
+    }
+
+    p { margin-bottom: 0.75rem; }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    .stat-card {
+      background: var(--surface-2);
+      border-radius: 8px;
+      padding: 1rem;
+      text-align: center;
+    }
+
+    .stat-card .number {
+      font-size: 1.75rem;
+      font-weight: 700;
+      font-family: var(--mono);
+    }
+
+    .stat-card .label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      font-family: var(--mono);
+    }
+
+    .badge-critical { background: var(--red-dim); color: var(--red); }
+    .badge-high { background: var(--red-dim); color: var(--orange); }
+    .badge-medium { background: var(--yellow-dim); color: var(--yellow); }
+    .badge-low { background: var(--surface-2); color: var(--text-muted); }
+    .badge-info { background: var(--surface-2); color: var(--blue); }
+    .badge-blocker { background: var(--red-dim); color: var(--red); }
+    .badge-suggestion { background: var(--yellow-dim); color: var(--yellow); }
+    .badge-nit { background: var(--surface-2); color: var(--text-muted); }
+    .badge-added { background: var(--green-dim); color: var(--green); }
+    .badge-modified { background: var(--yellow-dim); color: var(--yellow); }
+    .badge-deleted { background: var(--red-dim); color: var(--red); }
+    .badge-pass { background: var(--green-dim); color: var(--green); }
+    .badge-fail { background: var(--red-dim); color: var(--red); }
+
+    .finding {
+      background: var(--surface-2);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 0.5rem;
+      border-left: 3px solid var(--border);
+    }
+
+    .finding.critical { border-left-color: var(--red); }
+    .finding.high { border-left-color: var(--orange); }
+    .finding.medium { border-left-color: var(--yellow); }
+    .finding.blocker { border-left-color: var(--red); }
+    .finding.suggestion { border-left-color: var(--yellow); }
+
+    .finding-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+
+    .finding-title { font-weight: 600; font-size: 0.9rem; }
+
+    .finding-location {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .finding-body { font-size: 0.85rem; color: var(--text-muted); }
+    .finding-fix {
+      margin-top: 0.5rem;
+      padding: 0.5rem;
+      background: var(--bg);
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--green);
+    }
+
+    .file-list {
+      list-style: none;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+    }
+
+    .file-list li {
+      padding: 0.4rem 0;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .file-list li:last-child { border-bottom: none; }
+
+    .deviation {
+      background: var(--surface-2);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 0.5rem;
+      border-left: 3px solid var(--yellow);
+    }
+
+    .deviation-planned { color: var(--text-muted); font-size: 0.85rem; }
+    .deviation-actual { color: var(--yellow); font-size: 0.85rem; font-weight: 500; }
+    .deviation-reason { color: var(--text-muted); font-size: 0.8rem; font-style: italic; margin-top: 0.25rem; }
+
+    .test-bar {
+      display: flex;
+      height: 8px;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 0.5rem 0;
+    }
+
+    .test-bar-pass { background: var(--green); }
+    .test-bar-fail { background: var(--red); }
+    .test-bar-skip { background: var(--surface-2); }
+
+    .changelog-entry {
+      font-size: 0.9rem;
+      padding: 0.5rem 0;
+    }
+
+    .changelog-entry .type {
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .footer {
+      text-align: center;
+      padding: 2rem 0 1rem;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+    }
+
+    .footer a { color: var(--accent); text-decoration: none; }
+
+    code {
+      font-family: var(--mono);
+      background: var(--surface-2);
+      padding: 0.1rem 0.3rem;
+      border-radius: 3px;
+      font-size: 0.85em;
+    }
+
+    .collapsible summary {
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.9rem;
+      padding: 0.5rem 0;
+      color: var(--accent);
+    }
+
+    .collapsible summary:hover { color: var(--purple); }
+  </style>
+</head>
+<body>
+
+<div class="report-header">
+  <h1>{{title}}</h1>
+  <div class="report-meta">
+    <span>{{date}}</span>
+    <span>{{duration}}</span>
+    <span>{{agents_used}} agents dispatched</span>
+  </div>
+</div>
+
+<!-- TASK SUMMARY -->
+<div class="section">
+  <h2>Task Summary</h2>
+  <p>{{task_summary}}</p>
+</div>
+
+<!-- QUICK STATS -->
+<div class="summary-grid">
+  <div class="stat-card">
+    <div class="number" style="color: var(--accent)">{{files_changed_count}}</div>
+    <div class="label">Files Changed</div>
+  </div>
+  <div class="stat-card">
+    <div class="number" style="color: var(--red)">{{blockers_count}}</div>
+    <div class="label">Blockers Found</div>
+  </div>
+  <div class="stat-card">
+    <div class="number" style="color: var(--yellow)">{{security_findings_count}}</div>
+    <div class="label">Security Findings</div>
+  </div>
+  <div class="stat-card">
+    <div class="number" style="color: var(--green)">{{tests_passing}}</div>
+    <div class="label">Tests Passing</div>
+  </div>
+</div>
+
+<!-- PLAN VS REALITY -->
+<div class="section" id="deviations">
+  <h2>Plan vs Reality</h2>
+  <!-- Deviation items injected here -->
+  {{deviations_html}}
+</div>
+
+<!-- FILES CHANGED -->
+<div class="section" id="files">
+  <h2>Files Changed</h2>
+  <ul class="file-list">
+    {{files_html}}
+  </ul>
+</div>
+
+<!-- REVIEW FINDINGS -->
+<div class="section" id="review">
+  <h2>Review Findings</h2>
+  {{review_html}}
+</div>
+
+<!-- SECURITY FINDINGS -->
+<div class="section" id="security">
+  <h2>Security Sweep</h2>
+  {{security_html}}
+</div>
+
+<!-- TEST RESULTS -->
+<div class="section" id="tests">
+  <h2>Test Results</h2>
+  {{tests_html}}
+</div>
+
+<!-- CLAUDE.MD UPDATES -->
+<div class="section" id="claude-md">
+  <h2>CLAUDE.md Updates</h2>
+  {{claude_md_html}}
+</div>
+
+<!-- CHANGELOG -->
+<div class="section" id="changelog">
+  <h2>Changelog Entry</h2>
+  {{changelog_html}}
+</div>
+
+<div class="footer">
+  Generated by <a href="#">Mido</a> — Autonomous Development Orchestrator
+</div>
+
+</body>
+</html>

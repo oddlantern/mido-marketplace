@@ -1,0 +1,9 @@
+{
+  "plugins": {
+    "mido": {
+      "name": "mido",
+      "description": "Autonomous development orchestrator with self-improving agents. Once initialized on a codebase, mido becomes the active orchestrator — dispatching specialist agents for code review, security analysis, testing, documentation, and reporting.",
+      "source": "./plugins/mido"
+    }
+  }
+}
