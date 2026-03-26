@@ -156,6 +156,11 @@ conventions in addition to the project's CLAUDE.md rules.
   and map them to HTTP responses via exception handlers. Never return raw string errors.
 - **File uploads**: Always enforce file size limits via `UploadFile` with explicit
   `max_size` checks before processing. Validate MIME type, not just extension.
+- **File parsing (CSV, JSON, XML)**: Always wrap parsing in try/except and handle malformed
+  input gracefully. For CSV: catch `csv.Error`, handle encoding issues (`chardet` or explicit
+  `encoding` param), reject files with inconsistent column counts, and return a structured
+  error describing what went wrong (line number, expected vs actual columns). Never let a
+  `UnicodeDecodeError` or `csv.Error` propagate as a 500 — map to 422 with a user-facing message.
 - **Structured responses**: All endpoints return Pydantic models, never raw dicts or tuples.
   Use `response_model` parameter on route decorators to enforce this.
 - **Logging**: Use Python's `logging` module with `structlog` or JSON formatter — never
@@ -306,7 +311,9 @@ conventions in addition to the project's CLAUDE.md rules.
 - **Down migration safety**: Down migrations must not lose data where possible. Prefer
   `ALTER TABLE ... DROP COLUMN` with a comment noting the data loss, or use a temp table
   to preserve data when feasible.
-- **Foreign keys**: Always create an index on the FK column in the same migration.
+- **Foreign keys**: ALWAYS create an index on the FK column in the same migration — this is
+  a hard rule, not a suggestion. Unindexed FKs cause full table scans on joins and cascading
+  deletes. Write the `CREATE INDEX` immediately after the `ALTER TABLE ... ADD CONSTRAINT`.
 - **Defaults**: New non-nullable columns on existing tables MUST have a `DEFAULT` value to
   avoid locking issues on large tables.
 
