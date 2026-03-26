@@ -1,4 +1,5 @@
 ---
+name: report
 description: "Generate or view mido reports — HTML health reports, analysis summaries, task history. Use when: report, generate report, show report, what did we do, last report, mido report."
 ---
 

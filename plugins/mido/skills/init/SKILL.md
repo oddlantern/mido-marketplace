@@ -1,4 +1,5 @@
 ---
+name: init
 description: "Initialize mido on the current codebase — detect stack, generate config, create CLAUDE.md, and produce the first health report. Use when: init, initialize, set up mido, start mido, scaffold mido, mido init."
 ---
 

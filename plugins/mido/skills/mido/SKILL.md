@@ -11,7 +11,8 @@ description: >
   building", "implement this", "init project", "scaffold", "set up a new project", "dispatch
   agents", "run agents", "dispatch reviewers", "security sweep", "audit my code", "analyse my
   code", "generate report", "create tests", "generate docs", "update CLAUDE.md", "pentest",
-  "penetration test", "pen test my API", "security audit", "probe my endpoints".
+  "penetration test", "pen test my API", "security audit", "probe my endpoints",
+  "resume", "pick up where we left off", "pending fixes", "what is mido", "describe yourself".
 ---
 
 # Mido — Autonomous Development Orchestrator
@@ -55,6 +56,7 @@ endpoint", "what's the state of the codebase?", "review my auth flow"), mido inf
 | `/mido:report` or "show reports" or "generate report" | **REPORT** | Run the Report Flow |
 | `/mido:analyse` or "analyse my code" or "security sweep" or "audit my code" or "dispatch reviewers" or "dispatch agents" or "run agents" | **ANALYSE** | Run the Analyse Flow |
 | `/mido:pentest` or "pentest" or "penetration test" or "pen test my API" | **PENTEST** | Run the Pentest Flow |
+| `/mido:resume` or "resume" or "pick up where we left off" or "continue fixes" or "pending fixes" | **RESUME** | Run the Resume Flow |
 | `/mido:about` or "what is mido" or "describe yourself" or "what can you do" or "introduce yourself" | **ABOUT** | Run the About Flow |
 
 ### Implicit Routing (Always-On Mode)
@@ -70,12 +72,89 @@ apply these rules:
 | Pastes a plan, spec, or numbered list of steps | **TASK** | Multi-line paste with implementation steps |
 | Asks about reports or past work | **REPORT** | "what did we do last time?", "show me the last report" |
 | Asks to test security or exploit something | **PENTEST** | "can someone break into the API?", "test the auth endpoints" |
+| Asks to continue, resume, or pick up pending work | **RESUME** | "pick up where we left off", "any pending fixes?", "continue from last time" |
 | Asks what mido is, what it can do, or to describe itself | **ABOUT** | "what is mido?", "describe yourself", "what can you do?", "show capabilities" |
 | Unclear or non-code request | **Ask** | Ask the user what they need — do not guess |
 
 **Important**: Implicit routing means the user never has to think about mido commands. They just
 describe what they want, and mido figures out which agents to dispatch. The explicit subcommands
 exist as shortcuts and for precision, not as the primary interface.
+
+---
+
+## Report ID System
+
+Every report gets a unique ID. This ID is used in filenames, meta tags, MEMORY.md references,
+and the RESUME flow. Without it, multiple reports on the same date are ambiguous.
+
+### ID Format
+
+```
+{TYPE}-{YYYY-MM-DD}-{SEQ}
+```
+
+- **TYPE**: `INIT`, `ANA`, `TASK`, `PEN` (uppercase, matches report type)
+- **YYYY-MM-DD**: Date the report was generated
+- **SEQ**: Zero-padded 2-digit sequence number, starting at `01`. Incremented per TYPE per day.
+
+Examples: `INIT-2026-03-26-01`, `ANA-2026-03-26-01`, `ANA-2026-03-26-02`, `TASK-2026-03-26-01`
+
+### How to determine SEQ
+
+Before generating a report, scan `.mido/reports/` for existing files that match the same TYPE
+and date prefix. Count them and increment. If no matches exist, SEQ is `01`.
+
+### Filename convention
+
+```
+.mido/reports/{TYPE}-{YYYY-MM-DD}-{SEQ}_{slug}.html
+```
+
+- For INIT: slug is `init` → `INIT-2026-03-26-01_init.html`
+- For ANALYSE: slug is `analysis` → `ANA-2026-03-26-01_analysis.html`
+- For TASK: slug is the task slug → `TASK-2026-03-26-01_add-pagination.html`
+- For PENTEST: slug is `pentest` → `PEN-2026-03-26-01_pentest.html`
+
+### Meta tag
+
+Every report HTML file MUST include:
+```html
+<meta name="mido-report-id" content="{TYPE}-{YYYY-MM-DD}-{SEQ}">
+```
+
+This tag is how the REPORT listing mode, MEMORY.md references, and RESUME flow identify reports.
+
+### MEMORY.md references
+
+When writing to MEMORY.md, always reference the full report ID — never just a date:
+```
+report: ANA-2026-03-26-01
+```
+
+### Legacy report compatibility
+
+Reports generated before the ID system use the old `YYYY-MM-DD_{type}.html` format and have
+no `mido-report-id` meta tag. Mido MUST handle these gracefully:
+
+1. **When listing reports** (REPORT mode): If a file in `.mido/reports/` doesn't match the
+   `{TYPE}-{DATE}-{SEQ}_{slug}.html` pattern, infer the type from the slug portion:
+   - `*_init.html` → type INIT
+   - `*_analysis.html` → type ANA
+   - `*_pentest.html` → type PEN
+   - All others → type TASK
+   Display these as `[legacy] {filename}` in the listing.
+
+2. **When referencing in MEMORY.md**: If the report has no ID, use the filename as the reference:
+   ```
+   report: 2026-03-26_analysis.html (legacy — no report ID)
+   ```
+
+3. **When resuming a fix cycle**: If the `source` field in a Pending Fix Cycle references a
+   legacy filename instead of a report ID, match against filenames in `.mido/reports/` directly.
+
+4. **Migration**: When mido generates a NEW report and detects legacy reports in the same
+   directory, it should NOT retroactively rename or modify them. Legacy reports stay as-is.
+   Only new reports use the ID system.
 
 ---
 
@@ -138,11 +217,29 @@ This is not a log. It's a handoff note to the next mido instance. Max 500 charac
 
 ```markdown
 # Mido Memory
-[task-slug] YYYY-MM-DD — [what was done, key decisions, what's pending next, any unresolved
-blockers or user preferences learned during the session. Written for mido, not humans.]
+
+## Last Session
+mode: [INIT|TASK|ANALYSE|PENTEST|REPORT]
+date: YYYY-MM-DD
+report: [report ID if applicable, e.g. ANA-2026-03-26, TSK-2026-03-26]
+summary: [what was done, key decisions, what's pending next]
+
+## Pending Fix Cycle
+(only present if user chose option (d) — defer)
+source: ANA-2026-03-26
+findings: [N] total ([C] critical, [H] high, [M] medium, [L] low)
+1. [severity] [workspace] [category]: [summary]
+2. ...
 ```
 
-The file should never exceed ~10 lines. Each session overwrites the previous memory. If the
+**Entry disambiguation**: Each memory entry MUST include the `mode` and `report` fields so that
+INIT, ANALYSE, TASK etc. on the same date are never ambiguous. The `report` field links to the
+file in `.mido/reports/` — this is the unique key. If multiple operations happened in the same
+session, the Last Session section reflects the LAST operation completed, and earlier operations
+are mentioned in the `summary` field (e.g., "ran INIT then ANALYSE — 57 findings, user deferred
+fix cycle").
+
+The file should never exceed ~15 lines. Each session overwrites the previous memory. If the
 next mido instance needs historical detail, it reads `.mido/reports/` — that's what reports are for.
 MEMORY.md is just the last breadcrumb so mido doesn't start cold.
 
@@ -298,7 +395,7 @@ Files I'll generate:
 - .mido/config.yml
 - CLAUDE.md (root)
 - [per-workspace CLAUDE.md files if monorepo]
-- .mido/reports/YYYY-MM-DD_init.html
+- .mido/reports/INIT-{YYYY-MM-DD}-{SEQ}_init.html
 
 Proceed? (a) Yes, generate everything (b) Let me adjust something first
 ```
@@ -343,7 +440,10 @@ mido operations without assuming the user has run any prior commands:
 
 **4c. Generate init report**
 
-Generate `.mido/reports/YYYY-MM-DD_init.html` using the report template from `assets/report-template.html`.
+Generate the init report using the Report ID System (see section above). Determine the SEQ by
+scanning `.mido/reports/` for existing `INIT-{today}` files. Write the report to
+`.mido/reports/INIT-{YYYY-MM-DD}-{SEQ}_init.html` using the template from `assets/report-template.html`.
+Include the `<meta name="mido-report-id">` tag.
 The init report documents: what was configured, what self-learning suggestions were applied,
 the project standards established, and the generated CLAUDE.md contents.
 
@@ -357,8 +457,8 @@ explicitly — if any check fails, fix it before continuing.
    skipped Step 4 — go back and write the file.
 2. **`.mido/reports/` directory exists** — if not, create it now.
 3. **`.mido/adrs/` directory exists** — if not, create it now.
-4. **`.mido/reports/YYYY-MM-DD_init.html` exists** — if the report file is missing, you skipped
-   Step 4c. Generate it now using the report template. This is the most commonly skipped step —
+4. **`.mido/reports/INIT-*_init.html` exists for today** — if the report file is missing, you skipped
+   Step 4c. Generate it now using the report template and ID system. This is the most commonly skipped step —
    do not proceed without it.
 5. **CLAUDE.md enforceability** — verify no vague rules slipped through (e.g., "follow best
    practices"). Rewrite any to be specific.
@@ -906,11 +1006,13 @@ validated during co-execution, (2) findings by severity from Phase 3 + Phase 5 (
 
 ### Phase 7: Report Generation
 
-Generate `.mido/reports/YYYY-MM-DD_<task-slug>.html` using the report template.
+Generate the task report using the Report ID System. Determine the SEQ by scanning `.mido/reports/`
+for existing `TASK-{today}` files. Write to `.mido/reports/TASK-{YYYY-MM-DD}-{SEQ}_{task-slug}.html`.
 
-Every report HTML file MUST include meta tags: `mido-summary` (1-line summary), `mido-type`
-(task|init|analysis|pentest), and `mido-health-score` (for analysis reports). Use the type-specific
-summary formats from `references/report-metadata.md` — this tag is not optional for any report.
+Every report HTML file MUST include meta tags: `mido-report-id` (the full report ID),
+`mido-summary` (1-line summary), `mido-type` (task|init|analysis|pentest), and `mido-health-score`
+(for analysis reports). Use the type-specific summary formats from `references/report-metadata.md`
+— these tags are not optional for any report.
 
 The report includes:
 - **Task summary** — What was requested and what was delivered
@@ -983,7 +1085,7 @@ After generating the report, update `.mido/config.yml` internal state:
 
 ```
 📋 Task complete. Here's your report:
-[View report](computer:///.mido/reports/YYYY-MM-DD_task-slug.html)
+[View report](computer:///.mido/reports/TASK-{YYYY-MM-DD}-{SEQ}_{task-slug}.html)
 
 Summary:
 - X files changed
@@ -1331,7 +1433,9 @@ security finding and 4 medium code quality issues").
 
 ### Step 4: Generate Analysis Report
 
-Produce `.mido/reports/YYYY-MM-DD_analysis.html` with:
+Produce the analysis report using the Report ID System. Determine SEQ by scanning `.mido/reports/`
+for existing `ANA-{today}` files. Write to `.mido/reports/ANA-{YYYY-MM-DD}-{SEQ}_analysis.html`.
+Include the `<meta name="mido-report-id">` tag. Contents:
 - **Executive summary** — Total findings by severity, overall health score (A through F) with
   numeric score and 1-sentence justification
 - **Findings by domain** — Grouped by category with agent attribution
@@ -1361,8 +1465,34 @@ Would you like me to:
     (engineer → reviewer → guardian → tests → security sweep → report per batch)
 (b) Fix only Critical and High findings
 (c) Let me pick which ones to fix [show numbered list]
-(d) No fixes — I'll handle them manually via /mido:task
+(d) Exit for now — save findings to memory and resume later via /mido:resume
+(e) No fixes — I'll handle them myself
 ```
+
+**If the user chooses (d) — defer to next session:**
+
+1. Write the full findings list to `.mido/MEMORY.md` under a `## Pending Fix Cycle` section
+   (following the structured memory format defined in Session Memory — Continuity Engine):
+   ```
+   ## Pending Fix Cycle
+   source: ANA-{YYYY-MM-DD}-{SEQ}
+   findings: [N] total ([C] critical, [H] high, [M] medium, [L] low)
+   1. [severity] [workspace] [category]: [summary]
+   2. ...
+   ```
+   The `source` field MUST be the full report ID (e.g., `ANA-2026-03-26-01`) — this is how
+   RESUME knows which analysis report to reference. It matches the `mido-report-id` meta tag
+   and the filename prefix in `.mido/reports/`.
+2. Confirm to the user: "Findings saved. Next session, say `/mido:resume` or just 'pick up where
+   we left off' and I'll present the same options with the full list."
+3. Do NOT start any fixes.
+
+**If the user chooses (e) — no fixes:**
+
+Acknowledge and close. The findings remain in the analysis report (`.mido/reports/`) for
+reference, but no pending fix cycle is written to MEMORY.md. The user is choosing to handle
+things entirely on their own — they can still reference the report and describe individual
+fixes in natural language (mido will route those to TASK mode via implicit routing).
 
 **If the user chooses (a), (b), or (c):**
 
@@ -1471,7 +1601,9 @@ ALL steps must fail. Also re-scan the fixed area for fix-induced regressions.
 
 ### Phase 8: Report Generation
 
-Produce `.mido/reports/YYYY-MM-DD_pentest.html` with: executive summary, engagement details,
+Produce the pentest report using the Report ID System. Determine SEQ by scanning `.mido/reports/`
+for existing `PEN-{today}` files. Write to `.mido/reports/PEN-{YYYY-MM-DD}-{SEQ}_pentest.html`.
+Include the `<meta name="mido-report-id">` tag. Contents: executive summary, engagement details,
 threat model, exploit chains (dedicated section), findings by severity, post-exploitation
 assessment, remediation timeline, residual risk, methodology, and appendix (audit trail).
 
@@ -1494,7 +1626,7 @@ coverage, regression tests pass, CLAUDE.md updates consistent.
 ## Agent Reference
 
 Mido ships with 8 specialist agents in `agents/`. Each is a self-contained persona with
-deep expertise in its domain. These agents are continuously improved via AutoResearch.
+deep expertise in its domain. These agents are continuously improved via SelfRefine (see below).
 
 | Agent | File | Role | Synthesised From |
 |---|---|---|---|
@@ -1713,6 +1845,55 @@ chose not to adopt" so future sessions don't re-propose the same rule for the sa
 
 ---
 
+## SelfRefine — Agent Self-Improvement
+
+Mido agents improve through a Karpathy-style propose → evaluate → keep/discard loop.
+The operator runs SelfRefine manually — mido never self-triggers it.
+
+### Three-File Contract
+
+| File | Role | Ships with plugin? |
+|---|---|---|
+| Target (SKILL.md or agents/*.md) | The mutable file being optimised | Yes |
+| Eval suite (evals/*.json) | Immutable assertions — the test harness | No (operator only) |
+| Program (selfrefine-program.md) | Research direction + scoring formula | No (operator only) |
+
+### The Loop
+
+```
+repeat:
+  1. Establish baseline (assertion pass rate × line count)
+  2. Identify weakest assertion or highest-ROI compression target
+  3. Propose ONE mutation (describe before executing)
+  4. Mutate the target file
+  5. Re-evaluate all assertions
+  6. Score: (passed/total) × (baseline_lines/current_lines)^0.3
+  7. If score improved → KEEP. If equal but shorter → KEEP. Otherwise → REVERT.
+  8. Log to selfrefine-log.jsonl
+  9. Stop after N cycles, on plateau, or when operator says stop
+```
+
+### Hard Constraints
+
+- No assertion regressions — if a passing assertion breaks, always revert
+- No semantic deletions — compression means fewer words, not fewer capabilities
+- One mutation per cycle — isolate cause and effect
+- Line budget ceiling — target file may never exceed 120% of session baseline
+
+### Composite Score
+
+```
+score = (assertions_passed / total_assertions) × (baseline_lines / current_lines)^0.3
+```
+
+Correctness dominates. Compression is a tiebreaker and long-term pressure.
+A mutation that adds 100 lines to fix 1 assertion will likely score lower.
+A mutation that removes 50 lines while maintaining all assertions scores higher.
+
+This is how mido gets better without getting bigger.
+
+---
+
 ## Changelog Management
 
 Mido maintains `CHANGELOG.md` in the project root using Keep a Changelog format:
@@ -1737,6 +1918,49 @@ Mido maintains `CHANGELOG.md` in the project root using Keep a Changelog format:
 
 Each task appends to the `[Unreleased]` section. When the user cuts a release, the unreleased
 items move under the version heading.
+
+---
+
+## Resume Flow
+
+When the user says "resume", "pick up where we left off", "pending fixes", or invokes `/mido:resume`,
+mido checks for deferred work and re-presents the fix cycle options.
+
+### Steps
+
+1. **Read `.mido/MEMORY.md`** and look for a `## Pending Fix Cycle` section.
+
+2. **If a pending fix cycle exists:**
+   - Parse the findings list, source analysis ID, and severity counts.
+   - Present the findings to the user:
+   ```
+   You have a pending fix cycle from {date} (analysis {ANA-ID}).
+   {N} findings: {C} critical, {H} high, {M} medium, {L} low.
+
+   1. [severity] [workspace] [category]: [summary]
+   2. ...
+
+   Would you like me to:
+   (a) Fix all actionable findings — full agent cycle per batch
+   (b) Fix only Critical and High findings
+   (c) Let me pick which ones to fix [numbered list above]
+   (d) Not now — keep them pending for next time
+   (e) Discard — clear pending fixes, I've handled them myself
+   ```
+   - If the user picks (a), (b), or (c): execute the fix cycle as defined in ANALYSE Step 5.
+   - If the user picks (d): leave MEMORY.md unchanged, confirm "Still saved for next time."
+   - If the user picks (e): remove the `## Pending Fix Cycle` section from MEMORY.md, confirm
+     "Cleared. Findings still available in the original report at `.mido/reports/`."
+
+3. **If NO pending fix cycle exists:**
+   - Check MEMORY.md for any other pending items (incomplete tasks, interrupted batches, etc.).
+   - If found, summarize them and ask the user which to pick up.
+   - If nothing pending: "Nothing pending from previous sessions. What would you like to work on?"
+
+4. **Session start auto-detection:** When mido starts a new session and reads MEMORY.md during
+   the standard Session Start flow, if a `## Pending Fix Cycle` section exists, mido should
+   proactively mention it: "You have {N} pending findings from last session. Say `/mido:resume`
+   when you're ready to pick them up, or just start working on something else."
 
 ---
 

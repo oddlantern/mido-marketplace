@@ -1,4 +1,5 @@
 ---
+name: analyse
 description: "Run a full codebase analysis — dispatch all review agents, generate findings report, and offer automated fix cycle. Use when: analyse, analyze, review, audit, dispatch reviewers, dispatch agents, run agents, codebase health, security sweep, mido analyse."
 ---
 

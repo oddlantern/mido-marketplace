@@ -1,4 +1,5 @@
 ---
+name: about
 description: "Introduce mido — describe capabilities, show what it's done on this project, and explain how it works. Use when: what is mido, describe yourself, what can you do, introduce yourself, show capabilities, mido about."
 ---
 

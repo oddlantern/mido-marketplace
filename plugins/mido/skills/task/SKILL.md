@@ -1,4 +1,5 @@
 ---
+name: task
 description: "Execute a development task through mido's full agent pipeline — plan, implement, review, and validate. Use when: build, add, fix, implement, create, change, task, mido task."
 ---
 
