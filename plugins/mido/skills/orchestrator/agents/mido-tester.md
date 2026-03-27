@@ -81,24 +81,7 @@ For each validated field, test:
 
 #### Service-Level Authorization Testing
 
-When a service method enforces ownership or permission checks, test the authorization boundary:
-
-```
-// ✅ Good — tests that user A cannot cancel user B's walk
-it('should reject cancellation by non-owner', async () => {
-  const walk = await createWalk({ userId: 'user-a', ... });
-  await expect(cancelWalk(walk.id, 'user-b')).rejects.toThrow('FORBIDDEN');
-});
-
-// ✅ Good — tests that owner CAN cancel their own walk
-it('should allow cancellation by owner', async () => {
-  const walk = await createWalk({ userId: 'user-a', ... });
-  const result = await cancelWalk(walk.id, 'user-a');
-  expect(result.status).toBe('cancelled');
-});
-```
-
-Always test both the **deny** and **allow** paths for every permission check.
+When a service method enforces ownership or permission checks, test both the **deny** path (user A cannot act on user B's resource → assert FORBIDDEN) and the **allow** path (owner can act → assert expected result) for every permission check.
 
 #### Pagination & List Endpoint Testing
 
@@ -333,21 +316,6 @@ it('should allow exactly one redemption under concurrent requests', async () => 
   const redemptions = await db.query('SELECT * FROM redemptions WHERE coupon_id = $1', [couponId]);
   expect(redemptions.rows).toHaveLength(1);
 });
-
-it('should prevent same coupon being claimed by different users concurrently', async () => {
-  const couponId = await createCoupon({ maxUses: 1 });
-
-  const results = await Promise.allSettled(
-    Array.from({ length: 10 }, (_, i) =>
-      request(app).post('/v1/coupons/redeem').send({ couponId, userId: `user-${i}` })
-    )
-  );
-
-  const successes = results.filter(
-    (r) => r.status === 'fulfilled' && r.value.status === 200
-  );
-  expect(successes).toHaveLength(1);
-});
 ```
 
 ### Security Regression Testing
@@ -542,22 +510,15 @@ When identifying missing tests, for EACH gap name:
 3. The **risk if untested** (e.g., "unhandled promise rejection crashes the worker process")
 
 ```json
-// Good missing-coverage entry
+// Good — specific scenario, behaviour, and risk
 "missing_coverage": [
   {
     "scenario": "payment gateway timeout (no response within 10s)",
     "expected_behaviour": "returns 503 with error.code = 'GATEWAY_TIMEOUT'",
     "risk": "unhandled promise rejection brings down the worker"
-  },
-  {
-    "scenario": "charge succeeds but DB INSERT throws a unique constraint violation",
-    "expected_behaviour": "payment is rolled back, returns 500 with error.code = 'INTERNAL_ERROR'",
-    "risk": "customer is charged but order is not created"
   }
 ]
-
-// Bad — vague, no actionable specifics
-"missing_coverage": ["add more error tests", "test timeouts"]
+// Bad — "add more error tests", "test timeouts" (vague, no actionable specifics)
 ```
 
 #### Shallow Test Anti-Patterns
@@ -811,9 +772,189 @@ When generating cross-language tests, check for these common serialisation misma
 | TypeScript | Vitest or Jest | `bun test` or `vitest` | describe/it/expect, mock modules |
 | Dart | flutter_test | `flutter test` | testWidgets, group/test, mockito |
 | Python | pytest | `pytest` | fixtures, parametrize, mock.patch |
+| Ruby | RSpec | `bundle exec rspec` | describe/context/it, FactoryBot, let/subject |
+| C# | xUnit | `dotnet test` | [Fact]/[Theory], Moq, Assert.Equal |
 | Rust | built-in | `cargo test` | #[test], #[cfg(test)], mock traits |
 | Go | testing | `go test` | TestXxx, table-driven tests |
 | PHP | PHPUnit | `phpunit` | TestCase, @dataProvider, prophecy |
+
+### Ruby/RSpec Testing
+
+When the project uses Ruby on Rails with RSpec, generate tests using **RSpec conventions only** — never Jest, Vitest, or any JavaScript test patterns.
+
+**Required patterns:**
+- Use `describe`/`context`/`it` blocks for test structure
+- Use `FactoryBot` for fixtures (`create(:order)`, `build(:user)`) — never raw `ActiveRecord.create` or JSON fixtures
+- Use RSpec matchers: `expect(result).to eq(expected)`, `expect { action }.to raise_error(CustomError)`, `expect { action }.to change(Order, :count).by(1)`
+- For async jobs, use `Sidekiq::Testing.inline!` or `Sidekiq::Testing.fake!` and assert with `have_enqueued_sidekiq_job`
+- Test domain-specific edge cases: empty collections, expired/invalid states, already-completed operations
+
+```ruby
+# ✅ Good — RSpec with FactoryBot and Sidekiq
+RSpec.describe OrderService do
+  describe '#create_order' do
+    let(:user) { create(:user) }
+    let(:items) { [create(:item, price: 1500)] }
+
+    it 'creates an order and enqueues confirmation job' do
+      expect { OrderService.create_order(user, items) }
+        .to change(Order, :count).by(1)
+        .and have_enqueued_sidekiq_job(OrderConfirmationWorker)
+    end
+
+    context 'with empty items' do
+      it 'raises ValidationError' do
+        expect { OrderService.create_order(user, []) }
+          .to raise_error(ValidationError, /items cannot be empty/)
+      end
+    end
+  end
+
+  describe '#refund_order' do
+    let(:order) { create(:order, :completed) }
+
+    context 'when already refunded' do
+      before { order.update!(status: :refunded) }
+
+      it 'raises AlreadyRefundedError' do
+        expect { OrderService.refund_order(order, 'duplicate charge') }
+          .to raise_error(AlreadyRefundedError)
+      end
+    end
+  end
+end
+```
+
+**Never emit** `describe`/`expect`/`toBe` from JavaScript frameworks when the project is Rails/RSpec. If the prompt specifies RSpec, FactoryBot, or Sidekiq, all test output MUST use Ruby syntax exclusively.
+
+### C#/xUnit Testing
+
+When the project uses .NET with xUnit, generate tests using **xUnit and C# conventions only** — never Jest, Vitest, or JavaScript patterns.
+
+**Required patterns:**
+- Use `[Fact]` for single-case tests and `[Theory]` with `[InlineData]` for parameterised tests — never `[Test]` (NUnit) or `describe`/`it` (JS)
+- Use `Moq` for mocking: `new Mock<IPaymentGateway>()`, `gateway.Setup(g => g.ChargeAsync(It.IsAny<decimal>())).ReturnsAsync(result)` — never `jest.fn()` or `vi.fn()`
+- Async test methods MUST return `async Task` — never `async void` (xUnit cannot observe async void failures)
+- Use `Assert.Equal(expected, actual)`, `Assert.Throws<T>(() => action)`, `await Assert.ThrowsAsync<T>(async () => await action)` — never `expect()` or `toBe()`
+- Mock `DbContext` for EF Core via `UseInMemoryDatabase`: `new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase("test").Options` or `Mock<DbSet<T>>` with `IQueryable` setup
+
+```csharp
+public class PaymentProcessorTests {
+    private readonly Mock<IPaymentGateway> _gw = new();
+    private readonly AppDbContext _db = new(new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+    [Fact] public async Task ProcessPayment_Valid_ReturnsCompleted() {
+        _gw.Setup(g => g.ChargeAsync(It.IsAny<decimal>())).ReturnsAsync(new ChargeResult { Success = true });
+        var result = await new PaymentProcessor(_gw.Object, _db).ProcessPayment(new Order { Amount = 50m });
+        Assert.Equal(PaymentStatus.Completed, result.Status); }
+    [Fact] public async Task Refund_BadId_Throws() => await Assert.ThrowsAsync<NotFoundException>(() => new PaymentProcessor(_gw.Object, _db).RefundPayment("bad-id", 10m));
+    [Theory] [InlineData(0)] [InlineData(-5)]
+    public async Task Refund_InvalidAmount_Throws(decimal amount) => await Assert.ThrowsAsync<ValidationException>(() => new PaymentProcessor(_gw.Object, _db).RefundPayment("pay-1", amount));
+}
+```
+
+**Never emit** `describe`/`it`/`expect`/`toBe` from JS frameworks when the project is .NET/xUnit. All output MUST use C# syntax exclusively.
+
+### GraphQL Resolver Testing
+
+When the project uses GraphQL, generate tests using **GraphQL test utilities** — never REST endpoint patterns (`GET /bookings`, `POST /bookings`).
+
+**Required patterns:**
+- Send actual GraphQL queries/mutations via the `graphql()` execution function or supertest against the `/graphql` endpoint — never `GET /resource` or `POST /resource`
+- Verify errors using `errors[].extensions.code` (the GraphQL error format), not HTTP status codes — a GraphQL error returns HTTP 200 with an `errors` array
+- Test query variables and input types by passing them through the `variables` field, not URL params or request body fields
+- Inject auth context into the resolver context (e.g., `contextValue: { user: mockUser }`) for protected mutations — do not set an `Authorization` header on a REST route
+
+**Test structure for each resolver:**
+
+| Category | What to Test | GraphQL Pattern |
+|---|---|---|
+| **Query with filtering** | Valid filters return matching results | `query { bookings(status: CONFIRMED) { id status } }` with `variables` |
+| **Mutation with validation** | Valid input creates resource, invalid input returns error in `errors[]` | `mutation($input: CreateBookingInput!) { createBooking(input: $input) { id } }` |
+| **Auth-protected mutation** | Without auth context → `errors[0].extensions.code === 'UNAUTHENTICATED'`; with auth → success | Execute same mutation with and without `contextValue.user` |
+| **Error format** | Every error response has `errors[].extensions.code` | Assert `res.body.errors[0].extensions.code` exists and matches expected code |
+
+```typescript
+// ✅ Good — GraphQL resolver tests
+describe('bookings query — GraphQL', () => {
+  it('should return filtered bookings via query variables', async () => {
+    const res = await request(app)
+      .post('/graphql')
+      .send({
+        query: `query($status: BookingStatus!) {
+          bookings(status: $status) { id status startDate }
+        }`,
+        variables: { status: 'CONFIRMED' }
+      });
+
+    expect(res.body.errors).toBeUndefined();
+    expect(res.body.data.bookings).toBeInstanceOf(Array);
+    expect(res.body.data.bookings[0]).toMatchObject({ status: 'CONFIRMED' });
+  });
+
+  it('should return UNAUTHENTICATED error for protected mutation without auth', async () => {
+    const res = await request(app)
+      .post('/graphql')
+      .send({
+        query: `mutation($input: CreateBookingInput!) {
+          createBooking(input: $input) { id }
+        }`,
+        variables: { input: { roomId: 'room-1', date: '2024-06-01' } }
+      });
+
+    // GraphQL errors are in the response body, not HTTP status
+    expect(res.status).toBe(200);
+    expect(res.body.errors).toBeDefined();
+    expect(res.body.errors[0].extensions.code).toBe('UNAUTHENTICATED');
+  });
+});
+
+// ❌ Bad — REST patterns for GraphQL API
+// GET /bookings?status=confirmed  ← wrong, this is REST
+// POST /bookings { roomId: ... } ← wrong, this is REST
+```
+
+**Never use** REST endpoint patterns (`GET /bookings`, `POST /bookings`, `DELETE /bookings/:id`) when the project uses GraphQL. All requests go through `POST /graphql` with `query` and `variables` fields.
+
+### MongoDB / Mongoose Integration Testing
+
+When the project uses MongoDB with Mongoose, generate **integration tests that hit a real MongoDB instance** — never mock Mongoose queries or substitute SQLite in-memory.
+
+**Required patterns:**
+- Use `mongodb-memory-server` for an ephemeral in-memory MongoDB instance or a dedicated test database — never SQLite in-memory (`better-sqlite3`, `sql.js`)
+- Execute actual Mongoose operations (`Model.create()`, `Model.find()`, `Model.findOneAndUpdate()`) — do not mock `Model.find` to return canned data
+- Clean up between tests using MongoDB operations (`await Model.deleteMany({})`) — never SQL `TRUNCATE TABLE` or `DELETE FROM`
+- Verify MongoDB-specific behavior that has no SQL equivalent:
+
+| Behaviour | How to Test |
+|---|---|
+| **Embedded document updates** | `findOneAndUpdate` with `$set` on nested path, then re-fetch and assert nested field changed |
+| **Array operations** | `$push` to add element, `$pull` to remove — assert array length and contents after each |
+| **Index usage** | Call `.explain('executionStats')` on a query and assert `totalKeysExamined > 0` (index was used) |
+| **Upsert semantics** | `findOneAndUpdate` with `upsert: true` on a missing doc — assert doc was created |
+
+```typescript
+// ✅ Good — actual Mongoose integration test with mongodb-memory-server
+import { MongoMemoryServer } from 'mongodb-memory-server';
+import mongoose from 'mongoose';
+
+let mongod: MongoMemoryServer;
+
+beforeAll(async () => {
+  mongod = await MongoMemoryServer.create();
+  await mongoose.connect(mongod.getUri());
+});
+afterAll(async () => { await mongoose.disconnect(); await mongod.stop(); });
+afterEach(async () => { await ProductModel.deleteMany({}); });
+
+it('should push a tag to product tags array', async () => {
+  const product = await ProductModel.create({ name: 'Widget', tags: ['sale'] });
+  await ProductModel.findByIdAndUpdate(product._id, { $push: { tags: 'new' } });
+  const updated = await ProductModel.findById(product._id);
+  expect(updated!.tags).toEqual(['sale', 'new']);
+});
+```
+
+**Never use** SQL assertions in MongoDB tests — no "check the migration ran", no "verify foreign key constraint", no `TRUNCATE`, no `SELECT * FROM`.
 
 ## Output Format
 

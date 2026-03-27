@@ -55,9 +55,7 @@ affected workspace's own CLAUDE.md.
 
 ### Writing Self-Contained, Quotable Rules
 
-Every CLAUDE.md rule you write must be **self-contained** — understandable without reading
-surrounding text. This is critical because other agents (mido-reviewer, mido-guardian) will
-**verbatim-quote** individual rules when citing violations or compliance checks.
+Every CLAUDE.md rule you write must be **self-contained** — understandable without reading surrounding text. This is critical because other agents (mido-reviewer, mido-guardian) will **verbatim-quote** individual rules when citing violations or compliance checks.
 
 **The quotability test**: Copy-paste the rule into a review comment with no other context. Can
 the developer understand what's required? If not, rewrite it.
@@ -217,16 +215,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Writing Good Entries
 
-A good changelog entry:
-- Starts with what changed from the user's perspective
-- Includes the issue/PR number if available
-- Explains impact, not implementation details
-- Uses past tense ("Added", "Fixed", not "Add", "Fix")
-
-A bad changelog entry:
-- "Updated dependencies" (which ones? why?)
-- "Fixed bug" (what bug? what was the impact?)
-- "Refactored code" (unless it changed behaviour, it doesn't go in the changelog)
+Good entries: user-perspective description of what changed, impact over implementation details, past tense ("Added"/"Fixed"), issue/PR number when available. Bad entries are vague — "Updated dependencies" (which ones? why?), "Fixed bug" (what impact?), "Refactored code" (omit unless behaviour changed).
 
 ### Category Mapping Guide
 
@@ -237,19 +226,10 @@ Use this table to assign the correct changelog category:
 | New feature or endpoint | **Added** | Added walk size options (S/M/L) with per-size pricing (#123) |
 | Behaviour change to existing feature | **Changed** | Changed rate limiting from fixed window to sliding window |
 | Bug fix | **Fixed** | Fixed race condition in concurrent walk booking that could double-book walkers |
-| Dependency upgrade for CVE | **Security** | Upgraded lodash to 4.17.21 to fix prototype pollution (CVE-2021-23337) |
+| Dependency upgrade for CVE | **Security** | Upgraded lodash to 4.17.21 to fix prototype pollution (CVE-2021-23337). Include package, version, vulnerability type, and CVE if available. |
 | Removed feature or endpoint | **Removed** | Removed legacy v0 walk endpoints |
 | Deprecation notice | **Deprecated** | Deprecated `GET /v1/walks/legacy` — use `GET /v1/walks` instead |
 | Internal refactoring only | **Omit** | Does not go in the changelog unless it changes observable behaviour |
-
-### Dependency Upgrade Entries
-
-When a dependency is upgraded to patch a vulnerability:
-- Category is always **Security**
-- Include the package name and the target version
-- Include the CVE identifier if available
-- State what the vulnerability was (e.g., "prototype pollution", "ReDoS", "path traversal")
-- Example: `Upgraded lodash to 4.17.21 to fix prototype pollution (CVE-2021-23337)`
 
 ## README Template
 
@@ -380,9 +360,36 @@ For each endpoint, document these sections in order:
 
 ### Error Response Documentation
 
-When an endpoint returns structured errors, document the error shape as thoroughly as the success
-shape. Every error code that the endpoint can return should be listed with its meaning and the
-conditions that trigger it.
+When an endpoint returns structured errors, document the error shape as thoroughly as the success shape. Every error code that the endpoint can return should be listed with its meaning and the conditions that trigger it.
+
+## Multi-Database Documentation
+
+When a feature spans multiple data stores, document each store using its **native terminology**.
+Conflating terms across paradigms is an error.
+
+### Terminology by Store Type
+
+| Concept | SQL (PostgreSQL, MySQL, MSSQL, Oracle) | Document DB (MongoDB) | Key-Value (DynamoDB) |
+|---|---|---|---|
+| Data container | table | collection | table |
+| Single record | row | document | item |
+| Record structure | columns | fields / embedded documents | attributes |
+| Schema change | migration | schema validation update | table/GSI creation |
+| Unique ID | primary key | `_id` / ObjectId | partition key + sort key |
+| Query optimisation | index | index | GSI / LSI |
+
+**Anti-conflation rule**: Never write "MongoDB table", "PostgreSQL document", "DynamoDB row", or
+similar cross-paradigm terms. Each store's terminology must be used exactly as listed above.
+
+### Multi-Store Changelog Entries
+
+Write separate changelog sub-entries naming each store explicitly:
+- Added `orders` table (PostgreSQL) with JSONB metadata column
+- Added `order_events` collection (MongoDB) for event sourcing with TTL index
+
+### Architectural Context for Multi-Store Projects
+
+When a project uses multiple data stores, document **why** each store was chosen and what role it plays (e.g., "PostgreSQL for transactional order data; MongoDB for event sourcing where schema flexibility and append-heavy writes are priorities"). This goes in the CLAUDE.md or ADR, not just inline comments.
 
 ## Security Finding Codification
 
@@ -470,34 +477,17 @@ cross-domain import prohibition."
 
 When you receive an ADR from mido-architect, record it faithfully:
 - Use the architect's own terminology and framing — do NOT reinterpret or improve the reasoning
-- If the ADR is incomplete (missing review trigger, missing consequences), note the gap in your
-  output's `reason` field but still record what was provided
-- The `Enforcement` section links to existing or proposed CLAUDE.md rules — do NOT invent rules
-  here; CLAUDE.md updates go through the Update Process separately
-- The `Consequences` section captures what the decision means for day-to-day work, including
-  team context (e.g., team size, current load) that informed the decision
+- If the ADR is incomplete (missing review trigger, missing consequences), note the gap in your output's `reason` field but still record what was provided
+- The `Enforcement` section links to existing or proposed CLAUDE.md rules — do NOT invent rules here; CLAUDE.md updates go through the Update Process separately
+- The `Consequences` section captures what the decision means for day-to-day work, including team context (e.g., team size, current load) that informed the decision
 
 ### ADR Consequence-to-Enforcement Extraction
 
-When an ADR includes consequences that imply development constraints, extract them into the
-Enforcement section as links to specific CLAUDE.md rules:
+When an ADR's consequences imply development constraints, extract them into the Enforcement section:
 
-1. **Scan the Consequences section** for language that implies a requirement or prohibition
-   (e.g., "modules communicate only through barrel exports", "direct imports across domain
-   boundaries are prohibited")
-2. **Check existing CLAUDE.md rules** — if a matching rule already exists, link to it by
-   section and rule text. If no matching rule exists, note it as a proposed CLAUDE.md update
-   in your output's `claude_md_proposals` array.
-3. **Extract the Review Trigger** from the architect's language. Look for quantitative
-   thresholds (e.g., "when volume exceeds 5k/s sustained"), time-based conditions (e.g.,
-   "when team grows past 12"), or qualitative signals (e.g., "when deployment frequency drops
-   below weekly"). Record these exactly as the architect stated them — do not round numbers
-   or soften language.
-4. **Preserve team context** — if the architect cited team size, current load, hiring plans,
-   or operational capacity as factors, include these in the Context section. These contextual
-   factors are what make the Review Trigger meaningful (e.g., "modular monolith because team
-   of 8 cannot support microservice ops overhead" — the team size is essential context for the
-   trigger "when team grows to 15+").
+1. **Scan Consequences for requirements/prohibitions** — link to existing CLAUDE.md rules by section and text, or add to `claude_md_proposals` if no matching rule exists.
+2. **Extract Review Triggers verbatim** — preserve quantitative thresholds, time-based conditions, and qualitative signals exactly as stated. Do not round numbers or soften language.
+3. **Preserve team context** — include team size, load, hiring plans, and operational factors in the Context section; these make the Review Trigger meaningful.
 
 ## Output Format
 

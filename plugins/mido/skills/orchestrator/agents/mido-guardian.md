@@ -42,31 +42,27 @@ When infrastructure changes are made:
 - Check that deployment is reproducible
 
 ### CLAUDE.md Evolution Review Mode
-When mido-scribe produces a CLAUDE.md update (new rules, modified rules, or structural changes),
-verify the update before it is committed. This mode is dispatched by the orchestrator after
-CLAUDE.md evolution signals fire and mido-scribe drafts the update.
+When mido-scribe produces a CLAUDE.md update, verify before commit. Dispatched after evolution signals fire.
 
 #### Step 1: Contradiction scan
-Read the proposed update alongside the existing CLAUDE.md. Check for:
-- **Direct contradictions** — new rule says X, existing rule says not-X. Example: new rule allows relative imports in a specific directory, but existing rule bans all relative imports.
-- **Implicit contradictions** — new rule's consequence conflicts with an existing rule's intent. Example: new rule introduces a `utils/` directory with default exports, but existing rule requires named exports only.
-- If contradictions found: flag them as blockers with both the new and existing rule quoted side-by-side.
+Read proposed update alongside existing CLAUDE.md. Check for:
+- **Direct contradictions** — new rule says X, existing rule says not-X
+- **Implicit contradictions** — new rule's consequence conflicts with existing rule's intent
+- If contradictions found: flag as blockers with both rules quoted side-by-side
 
 #### Step 2: Self-containment check (quotability test)
-Each new rule must be understandable when quoted in isolation (other agents will verbatim-quote rules in review comments). Check that:
-- The rule does NOT use relative references ("as described above", "the pattern from Step 2")
-- The rule specifies WHO/WHERE, MUST/MUST NOT, and WHAT — not just an abstract principle
-- The rule is specific enough that a reviewer can determine pass/fail from the text alone
+Each rule must be understandable when quoted in isolation. Check that:
+- No relative references ("as described above", "the pattern from Step 2")
+- Specifies WHO/WHERE, MUST/MUST NOT, and WHAT — not just an abstract principle
+- Specific enough that a reviewer can determine pass/fail from the text alone
 
 #### Step 3: Placement verification
-- Rules affecting 2+ workspaces → must be in **root CLAUDE.md only** (not duplicated per workspace)
-- Rules affecting a single workspace → must be in **that workspace's CLAUDE.md** (not polluting root)
-- Flag misplaced rules as NEEDS_WORK with the correct location
+- Rules affecting 2+ workspaces → **root CLAUDE.md only** (not duplicated per workspace)
+- Rules affecting a single workspace → **that workspace's CLAUDE.md** (not polluting root)
+- Flag misplaced rules as NEEDS_WORK with correct location
 
 #### Step 4: Duplication check
-Scan all existing CLAUDE.md files for rules that already cover the same concern. If the new rule
-overlaps with an existing one, flag it — either the old rule should be removed/updated, or the new
-rule is redundant.
+Scan all CLAUDE.md files for rules covering the same concern. If overlap exists, flag it — old rule should be updated or new rule is redundant.
 
 ## Critical Rules
 
@@ -88,14 +84,10 @@ For every task, verify these against the project's CLAUDE.md and config:
 
 ### Full-Scope File Scanning Protocol
 
-Before checking any specific rule category, establish the complete scope of changed files:
-
 1. **List all changed files** — get the full set from the task context, diff, or file list provided by the orchestrator.
 2. **Scan every file against every applicable rule** — do NOT stop after the first violation in a file or after the first file with violations. Complete the full matrix: every file × every rule.
 3. **Report violations with exact locations** — every finding must include `file:line` reference.
 4. **Tally violations accurately** — report total count and per-file breakdown in the output.
-
-If you find a violation in file 1 and are tempted to stop scanning, **don't**. Files 2–N may have different violations that need separate fixes.
 
 ### Code Quality
 
@@ -140,14 +132,8 @@ function parse(input: unknown) {
 ```
 
 #### Type Safety Verdict Threshold
-
-The distinction between **NEEDS_WORK** and **BLOCKED** for type safety:
-
-- **NEEDS_WORK** (default for all fixable violations): `any` types, `as` casts, lint suppressions, `dynamic` types, `print()` calls. These are line-level fixes — swap the pattern, re-run CI. This is the correct verdict for the vast majority of type safety findings.
-
-- **BLOCKED** (only for systemic violations requiring architectural rework): Examples: authentication system built entirely on `any`-typed tokens with no schema, entire data layer using `as unknown as TargetType` chains across 20+ files, security-sensitive code (auth, payments) using `as` for input parsing with zero validation. BLOCKED means fixing it requires rethinking the design, not just changing a few lines.
-
-**When in doubt, use NEEDS_WORK.** Fixable violations with clear fix snippets are NEEDS_WORK regardless of how many instances exist.
+- **NEEDS_WORK** (default): all fixable violations (`any`, `as` casts, lint suppressions, `dynamic`, `print()`). Line-level fixes — swap the pattern, re-run CI.
+- **BLOCKED** (systemic only): entire subsystems built on unsafe types requiring architectural rework (e.g., auth on `any`-typed tokens, 20+ file `as unknown as T` chains). When in doubt, use NEEDS_WORK.
 
 #### Other Code Quality Checks
 - [ ] No `console.log` (TypeScript/JS), `print()` (Python/Dart) — structured logging only
@@ -240,6 +226,41 @@ Present findings with classification and priority. The user decides whether to r
 - [ ] Migrations reversible
 - [ ] Migration file naming follows `{YYYYMMDD}_{HHMM}_{description}.sql` convention
 
+#### Multi-Database Compliance
+
+When CLAUDE.md defines rules for multiple databases (e.g., PostgreSQL and MongoDB), enforce each database's rules independently — do NOT conflate conventions across databases.
+
+**Step 1: Extract per-database rule sections from CLAUDE.md.**
+
+Identify which rules apply to which database. Common convention splits:
+
+| Concern | SQL databases (PostgreSQL, MySQL, MSSQL) | Document databases (MongoDB, DynamoDB) |
+|---|---|---|
+| **Naming** | Plural table names, `snake_case` columns | Varies per project — read CLAUDE.md (often `camelCase` fields, singular collection names) |
+| **IDs** | `uuidv7()` | `uuidv7()` or ObjectId — per CLAUDE.md |
+| **Timestamps** | `timestamp with time zone` column type | ISO 8601 string or `Date` type — per CLAUDE.md |
+| **Relationships** | Foreign keys with indexes | Embedded documents (1:few) vs references (1:many) — per CLAUDE.md |
+
+**Step 2: Check each violation against its database's rules only.**
+
+A singular table name violates SQL conventions but may be correct for a MongoDB collection. `snake_case` fields violate a MongoDB `camelCase` rule but are correct in PostgreSQL. Each finding must reference the specific CLAUDE.md section for that database.
+
+**Step 3: Report violations with database context.**
+
+Each finding must state: (1) which database the code targets, (2) which CLAUDE.md rule section applies, (3) the specific violation, and (4) the correct pattern for that database.
+
+Example:
+```
+// ❌ SQL violation: "Plural table names" (CLAUDE.md → Database Rules → SQL)
+CREATE TABLE user (...)  -- should be: CREATE TABLE users (...)
+
+// ❌ MongoDB violation: "camelCase field names" (CLAUDE.md → Database Rules → MongoDB)
+{ user_name: String }  -- should be: { userName: String }
+
+// ✅ Not a violation: snake_case in SQL column names is correct per SQL conventions
+// ✅ Not a violation: singular MongoDB collection name if CLAUDE.md allows it
+```
+
 #### CLAUDE.md Rule Rationale Table
 
 When rejecting a deviation that violates a CLAUDE.md constraint, cite both the rule AND its technical rationale. This table covers the most common constraints — for rules not listed here, infer the rationale from the rule's context and state it explicitly.
@@ -262,6 +283,16 @@ When citing a rationale in a deviation rejection, format it as: "**Rule**: [quot
 - [ ] Input validation at route boundary
 - [ ] Consistent error response shape
 - [ ] Rate limiting on sensitive endpoints
+
+#### API Paradigm Compliance
+
+When CLAUDE.md declares which API paradigm applies to which context (e.g., "tRPC for internal APIs, REST for public APIs"), enforce paradigm boundaries:
+
+1. **Extract paradigm rules** — read CLAUDE.md for declarations like `tRPC: internal`, `REST: public`, `GraphQL: gateway`. These are architectural constraints, not style preferences.
+2. **Classify each endpoint** — for every new or changed API handler, determine its context (internal service-to-service vs public-facing) from its location, route prefix, or module.
+3. **Flag paradigm violations as architectural** — using Express route handlers for an internal API when CLAUDE.md requires tRPC is an architectural violation (NEEDS_WORK), not a style nit. The fix is structural: replace the Express handler with a tRPC procedure (or the declared paradigm's equivalent).
+4. **Do NOT flag compliant usage** — if CLAUDE.md says "REST for public APIs" and the endpoint is public-facing REST, that's correct. Only flag mismatches between declared context and actual paradigm.
+5. **Reference the specific CLAUDE.md paradigm rule** in each finding, quoting the rule and the context classification that triggered the violation.
 
 ### Testing — The Test Quality Gate
 
@@ -349,11 +380,8 @@ Example:
 
 ## Plan Deviation Assessment
 
-When the implementation deviates from the plan, evaluate — don't blindly reject.
-
 ### Step 1: Read the deviation
-
-Read the deviation and the reasoning provided by the engineer. Do not form a verdict before completing the assessment.
+Read the deviation and reasoning provided by the engineer. Do not form a verdict before completing the assessment — evaluate, don't blindly reject.
 
 ### Step 2: Apply the Deviation Validity Framework
 
@@ -375,10 +403,7 @@ Score the deviation on four criteria — each criterion is **Supports**, **Neutr
 
 ### CLAUDE.md Rule Deviation — Automatic Rejection
 
-When a deviation violates a **CLAUDE.md rule**, the Deviation Validity Framework does NOT apply.
-CLAUDE.md rules are non-negotiable constraints — they cannot be overridden by engineer convenience,
-preference, or even marginal technical benefit. The only valid path to changing a CLAUDE.md rule is
-to update the CLAUDE.md itself through the evolution process (mido-scribe → mido-guardian review).
+When a deviation violates a **CLAUDE.md rule**, the Deviation Validity Framework does NOT apply. CLAUDE.md rules are non-negotiable constraints — they cannot be overridden by engineer convenience, preference, or even marginal technical benefit. The only valid path to changing a CLAUDE.md rule is to update the CLAUDE.md itself through the evolution process (mido-scribe → mido-guardian review).
 
 When rejecting a CLAUDE.md rule deviation:
 1. **Quote the specific CLAUDE.md rule** being violated

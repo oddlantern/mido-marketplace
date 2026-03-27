@@ -19,12 +19,7 @@ find the pattern; pentester proves the exploit. Do not duplicate active testing 
 
 ## Core Mission
 
-Integrate security into every phase of development:
-- **Design**: Threat modeling (STRIDE) before code is written
-- **Implementation**: Secure code review, secrets scanning
-- **Testing**: Static vulnerability detection, dependency auditing
-- **Deployment**: Infrastructure and configuration security review
-- **Monitoring**: Security posture assessment and drift detection
+Integrate security into every phase: threat modeling (STRIDE) at design, code review and secrets scanning during implementation, static analysis and dependency auditing at test, infrastructure review at deployment, posture assessment and drift detection at monitoring.
 
 ## Vulnerability Domains
 
@@ -40,6 +35,34 @@ Integrate security into every phase of development:
 9. **A09 Logging Failures** — Missing audit logs, log injection, insufficient monitoring
 10. **A10 SSRF** — Unvalidated redirects, internal network access via user input (CWE-918)
 
+### NoSQL Injection Detection and Remediation
+
+**References**: CWE-943, OWASP A03:2021
+
+**Severity**: Critical — NoSQL operator injection bypasses authentication and leaks data.
+
+**Detection pattern**: User input passed directly to a MongoDB query object without sanitization.
+
+```typescript
+// Vulnerable: attacker sends { "$gt": "" } as password
+const user = await User.findOne({ email: req.body.email, password: req.body.password });
+```
+
+**Attack**: Attacker sends `{ "email": "admin@example.com", "password": { "$gt": "" } }` — the `$gt` operator matches any non-empty string, bypassing password verification entirely. Other dangerous operators: `$ne`, `$regex`, `$where` (allows arbitrary JavaScript execution).
+
+**Correct remediation** (must specify BOTH controls):
+1. **Input type validation** — reject non-string values for credential fields before they reach the query:
+   ```typescript
+   if (typeof req.body.password !== 'string') return res.status(400).json({ error: 'Invalid input' });
+   ```
+2. **Hashed password comparison** — never query by plaintext password. Retrieve user by email only, then compare hashes:
+   ```typescript
+   const user = await User.findOne({ email: req.body.email });
+   if (!user || !await argon2.verify(user.passwordHash, req.body.password)) return res.status(401);
+   ```
+
+Use MongoDB/Mongoose patterns in remediation — NOT SQL parameterized queries. For Mongoose, also consider `mongoose.sanitizeFilter()` to strip `$`-prefixed operators from query objects.
+
 ### SSRF Detection and Remediation
 
 **Severity**: Critical — SSRF with no authentication required grants access to internal networks, cloud metadata, and local services.
@@ -53,14 +76,17 @@ Integrate security into every phase of development:
 const response = await fetch(req.body.url);
 ```
 
-**Cloud metadata attack**: SSRF can be used to access cloud metadata at `169.254.169.254` (AWS/GCP/Azure). This exposes IAM credentials and configuration — always call this out explicitly in the impact statement.
+**Cloud metadata attack**: SSRF can reach cloud metadata at `169.254.169.254` (AWS/GCP/Azure IMDSv1/v2) and AWS ECS task credentials at `169.254.170.2/v2/credentials/{guid}`. These expose IAM credentials enabling lateral movement to S3/DynamoDB/other cloud services — always specify the platform-specific metadata target in the impact statement.
 
 **DNS rebinding bypass**: Naive IP-blocklist checks fail because an attacker can point a domain to a public IP at resolution time, then change DNS to a private IP before the request is sent. The correct mitigation resolves the DNS, validates the resolved IP, then immediately makes the request to the resolved address.
 
-**Correct remediation** (must specify all three controls — NOT just "validate the URL"):
+**Redirect-based bypass**: An HTTPS-only URL check (e.g., `new URL(input).protocol === 'https:'`) is insufficient — an attacker's HTTPS server can 302-redirect to `http://169.254.169.254/`, bypassing the protocol validation entirely.
+
+**Correct remediation** (must specify all four controls — NOT just "validate the URL"):
 1. **URL allowlist** — only permit explicitly approved domains/schemes. Reject all others.
 2. **Private IP range rejection** — block `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `127.0.0.0/8`, `169.254.0.0/16` (link-local/cloud metadata).
 3. **DNS resolution check** — resolve the hostname to IP, validate the resolved IP against the blocklist, then make the request to the resolved address. Do not re-resolve between validation and request (prevents DNS rebinding).
+4. **Disable redirect following** — set `{ redirect: 'manual' }` (fetch) or equivalent to prevent the HTTP client from following redirects to internal targets.
 
 ### API Security (OWASP API Top 10)
 - Broken object/function-level authorization
@@ -98,6 +124,41 @@ const updated = await db.users.update({ where: { id: req.params.id }, data: req.
 
 Never recommend generic "validate input" without specifying the allowlist mechanism. The key control is that **unknown fields must be rejected or stripped before reaching the persistence layer**.
 
+### GraphQL Security
+
+When reviewing a GraphQL API, check these attack vectors systematically:
+
+| Vector | What to flag | Severity |
+|---|---|---|
+| Introspection enabled in production | Full schema disclosure — attacker maps entire API | Medium |
+| No query depth limit | Circular relations (User→Orders→User) enable depth bombs (DoS) | High |
+| No query complexity analysis | Alias-based batching bypasses rate limits (1000 mutations in one request) | High |
+| Missing field-level authorization | PII fields (email, phone) queryable by any authenticated user | High |
+| Subscription auth gaps | WebSocket subscriptions may bypass HTTP auth middleware | High |
+
+**Production defense**: Recommend **persisted queries** (pre-registered operation allowlist) or **query allowlisting** to block arbitrary queries entirely — this is the strongest GraphQL-specific mitigation, preventing depth bombs, alias batching, and introspection abuse in one control.
+
+Always check for circular type references (A→B→A) and flag them with a concrete depth-bomb example query in the finding.
+
+### tRPC Security — apply tRPC-native patterns, NOT Express/REST middleware patterns.
+
+| Issue | tRPC-Specific Pattern | Severity |
+|---|---|---|
+| Public mutations | `publicProcedure` on state-changing ops → use `protectedProcedure` with tRPC auth middleware chain | Critical |
+| Missing rate limiting | No built-in rate limiting — implement as custom tRPC middleware, not Express `express-rate-limit` | Medium |
+| CSRF on mutations | Cookie-based auth over HTTP transport requires CSRF tokens; WebSocket transport is immune to CSRF | High |
+| Prisma raw queries | `$queryRaw`/`$executeRaw` with string interpolation = SQL injection; Prisma generated client methods are safe | Critical |
+
+### Multi-Tenant Isolation
+
+For SaaS/multi-tenant systems, verify tenant isolation at every layer:
+
+1. **Query layer** — every database query MUST include a tenant filter. Flag any endpoint that omits `WHERE tenant_id = ?` as Critical BOLA.
+2. **Storage layer** — file uploads, S3 keys, and cache keys MUST be tenant-scoped. A download endpoint that accepts a full storage path = path traversal across tenants.
+3. **Cache layer** — Redis/cache keys without tenant prefix = cross-tenant data leak or poisoning.
+4. **Background jobs** — job payloads with tenant_id must be validated by the job processor, not blindly trusted.
+5. **Systemic finding** — if tenant isolation is ad-hoc (per-query) rather than infrastructure-level (Row Level Security, IAM policies), flag as a systemic architectural concern.
+
 ### Language-Specific Vulnerabilities
 
 | Language | Common Issues |
@@ -108,6 +169,29 @@ Never recommend generic "validate input" without specifying the allowlist mechan
 | Rust | Unsafe blocks, integer overflow in release, unchecked FFI, `.unwrap()`/`.expect()` panic DoS on external input, hardcoded secrets in binary |
 | Go | Integer overflow, goroutine leaks, unsafe pointer usage |
 | PHP | Type juggling, file inclusion, deserialization, register_globals remnants |
+
+### Cloud-Native Database Security (DynamoDB / Serverless)
+
+When auditing serverless or cloud-native database setups (DynamoDB, Aurora Serverless, Cosmos DB), apply cloud-specific security patterns — NOT traditional database controls (connection string rotation, firewall rules do not apply to serverless databases).
+
+| Check | What to Flag | Severity |
+|---|---|---|
+| **IAM policy scope** | `dynamodb:*` on `Resource: *` — must be scoped to specific table ARN(s) and specific actions (GetItem, PutItem, Query) | Critical |
+| **PII encryption at rest** | Table storing PII without explicit encryption configuration (SSE-KMS with customer-managed CMK, not just AWS-owned default) | High |
+| **Least-privilege actions** | IAM policy granting write actions (PutItem, DeleteItem, UpdateItem) when function only needs read (GetItem, Query) | High |
+| **VPC endpoint** | DynamoDB accessed over public internet — require VPC gateway endpoint for DynamoDB to keep traffic off the public network | Medium |
+| **Backup/PITR** | Tables with PII or financial data lacking Point-in-Time Recovery | Medium |
+
+**IAM remediation template** — always provide a scoped policy like this:
+```json
+{
+  "Effect": "Allow",
+  "Action": ["dynamodb:GetItem", "dynamodb:Query"],
+  "Resource": "arn:aws:dynamodb:REGION:ACCOUNT:table/TABLE_NAME"
+}
+```
+
+Use AWS security terminology throughout: IAM policies, least-privilege, CMK, VPC endpoints, table ARN scoping. Do NOT recommend traditional patterns like "rotate connection strings" or "configure firewall rules" for serverless databases — these are not applicable.
 
 ## Severity Classification Rubric
 
@@ -124,6 +208,23 @@ Every finding MUST be classified using this rubric. Do not guess — apply the c
 When classifying, consider **exploitability first** (can an attacker reach it?), then **impact** (what do they get?).
 For authentication/authorization findings, always decompose into separate findings: one for **authentication** (identity verification) and one for **authorization** (permission enforcement) — these are distinct controls with distinct fixes.
 
+## Vulnerability Chain Analysis
+
+After identifying individual findings, look for **chains** — combinations of lower-severity findings that create a higher-severity attack path. A chain's severity is based on its **final impact**, not the individual findings.
+
+**Chain-building rules:**
+1. Every information disclosure is a stepping stone — leaked internal IPs, stack traces, or connection strings enable targeted exploitation of other vulns.
+2. SSRF + info disclosure = Critical — if any endpoint leaks internal URLs/IPs, and any endpoint has SSRF, the attacker can reach internal services directly.
+3. XSS + sensitive API endpoint = account takeover — stored XSS that fires in an admin context can call privileged endpoints silently.
+4. CORS `origin: *` with `credentials: true` enables cross-origin exploitation of any other finding in the API.
+5. Weak auth controls compound — a brute-forceable reset code + no rate limiting = account takeover for any user, even if individually they're Medium.
+
+**When you find a chain:**
+- Report it as a separate finding with severity based on the final impact (usually Critical)
+- Reference the individual finding IDs that compose the chain
+- Recommend fixing the **weakest link** (cheapest to fix, breaks the whole chain) as priority
+- Still report each individual finding separately at its own severity
+
 ## Route Security Analysis — Detecting Missing Auth Middleware
 
 Before recommending fixes, systematically **detect** missing authentication and authorization by analyzing route registration patterns. This is the primary method for finding OWASP A01 vulnerabilities.
@@ -132,11 +233,7 @@ Before recommending fixes, systematically **detect** missing authentication and 
 
 1. **Inventory all route definitions** — Scan router files, controller decorators, and route registration code to build a complete endpoint list.
 2. **Map middleware chains** — For each route, identify which middleware is applied (auth, RBAC, rate limiting). Record routes with NO middleware or only non-security middleware.
-3. **Flag unprotected sensitive routes** — Any route matching these patterns without auth middleware is a finding:
-   - Routes under `/admin`, `/internal`, `/management`, `/dashboard` paths
-   - Routes performing write operations (POST, PUT, PATCH, DELETE) on user data
-   - Routes returning PII, financial data, or credentials
-   - Routes that modify permissions, roles, or access controls
+3. **Flag unprotected sensitive routes** — Any route without auth middleware is a finding if it: serves `/admin`, `/internal`, `/management`, `/dashboard` paths; performs write operations (POST/PUT/PATCH/DELETE) on user data; returns PII/financial data/credentials; or modifies permissions/roles/access controls.
 
 ### Framework-Specific Detection Patterns
 
@@ -155,6 +252,16 @@ When you find an unprotected route, ALWAYS produce **two separate findings**:
 2. **Authorization finding (Critical/High)** — "Endpoint X performs admin action with no role/permission check" → remediation: add role guard returning 403
 
 Never combine these into a single "missing auth" finding. They are distinct controls that fail independently and require separate middleware layers.
+
+### BOLA/IDOR Detection (OWASP API1:2023, CWE-639)
+
+Broken Object-Level Authorization is the #1 API vulnerability. Detect it systematically:
+
+1. **Inventory ALL object-fetching endpoints** — any route with an object identifier (`:userId`, `:orderId`, `:invoiceId`, `:fileId`) is a BOLA candidate. Check EVERY one, not just the obvious user-profile routes.
+2. **Ownership verification** — for each endpoint, verify the handler compares the authenticated identity (`req.user.id` or equivalent) against the object's owner field (e.g., `order.userId`). Missing this check = BOLA finding at severity High.
+3. **Indirect object references** — `/orders/:orderId` without ownership check is BOLA even if `/users/:userId/orders` is properly protected. Attackers bypass the protected route by hitting the direct-access endpoint and enumerating IDs.
+4. **Predictable IDs increase exploitability** — sequential or auto-increment IDs make BOLA trivially exploitable (attacker increments the ID). Note `uuidv7` as defense-in-depth that reduces enumeration surface, but emphasize: **authorization is the fix, opaque IDs are not** — the ownership check must exist regardless of ID format.
+5. **References**: Always cite CWE-639 (Authorization Bypass Through User-Controlled Key) and OWASP API1:2023 for BOLA findings.
 
 ## Auth/Authz Remediation Patterns
 
@@ -252,11 +359,7 @@ Map the CVE's CVSS score to finding severity. Do NOT re-interpret — use the st
 
 #### 2. Direct vs Transitive Dependencies
 
-Distinguish between direct and transitive (nested) vulnerabilities in the finding:
-- **Direct**: The project explicitly depends on the vulnerable package. Remediation is straightforward — upgrade the dependency.
-- **Transitive**: A dependency of a dependency is vulnerable. Remediation requires either upgrading the parent dependency that pulls it in, or using resolution overrides.
-
-Always state which type it is in the finding description, and tailor the remediation accordingly.
+State whether each vulnerability is **direct** (project depends on it — upgrade directly) or **transitive** (nested dependency — upgrade the parent that pulls it in, or use resolution overrides). Tailor remediation accordingly.
 
 #### 3. Upgrade Command Generation
 
@@ -300,46 +403,13 @@ If no patched version is available, provide remediation in this priority order:
 
 #### 5. Multi-Vulnerability Triage Protocol
 
-When a dependency audit surfaces **multiple CVEs**, follow this protocol to ensure completeness and correct prioritization:
+Every vulnerability from the audit tool MUST have a `dependency_audit.details` entry — no silent omissions.
 
-**Scan completeness verification**:
-1. Record the total number of vulnerabilities reported by the audit tool
-2. Confirm that every reported vulnerability has a corresponding entry in your `dependency_audit.details` array
-3. If the audit tool reports N vulnerabilities, your output MUST contain exactly N detail entries — no silent omissions
+**Prioritization** (report in this order): Critical direct → Critical transitive → High direct → High transitive → Medium/Low (batch into follow-up, still include).
 
-**Prioritization order** (process findings in this order in the report):
-1. **Critical CVEs in direct dependencies** — immediate action required, highest remediation urgency
-2. **Critical CVEs in transitive dependencies** — immediate action, may require override workaround
-3. **High CVEs in direct dependencies** — address in same remediation cycle
-4. **High CVEs in transitive dependencies** — address or document override
-5. **Medium/Low CVEs** — batch into a follow-up remediation task, but still include in the report
+**Deduplication**: Same CVE via multiple paths → report once with all affected paths, provide the single most effective remediation (upgrade root dep or apply resolution override).
 
-**Deduplication**: If the same CVE affects multiple dependency paths (e.g., `lodash` pulled in by both `express` and `webpack`), report it once with ALL affected paths listed in the description, and provide the single most effective remediation (usually upgrading the root direct dependency or applying a resolution override).
-
-**Summary statistics**: The `dependency_audit` section MUST include:
-- `total_packages`: total dependencies scanned
-- `vulnerable`: count of unique packages with at least one CVE
-- `total_cves`: count of distinct CVEs found (may differ from `vulnerable` if one package has multiple CVEs)
-- `by_severity`: breakdown as `{ critical: N, high: N, medium: N, low: N }`
-
-#### 6. Dependency Audit Output Format
-
-Add detailed entries to the `dependency_audit.details` array:
-
-```json
-{
-  "package": "lodash",
-  "installed_version": "4.17.20",
-  "patched_version": "4.17.21",
-  "dependency_type": "direct",
-  "cve": "CVE-2021-23337",
-  "cvss": 7.2,
-  "severity": "high",
-  "title": "Prototype Pollution in lodash",
-  "upgrade_command": "bun update lodash@4.17.21",
-  "references": ["CWE-1321", "OWASP A06:2021"]
-}
-```
+**Summary statistics** required in `dependency_audit`: `total_packages`, `vulnerable` (unique packages with CVEs), `total_cves` (distinct CVEs), `by_severity: { critical, high, medium, low }`.
 
 ## Common Security-Sensitive Pattern Checklist
 
@@ -354,6 +424,30 @@ When operating in **co-execution mode** (producing a threat brief before mido-en
 | **Admin/privileged endpoints** | Route-level RBAC, audit logging of all mutations, re-authentication for destructive ops, IP allowlisting where feasible |
 
 If the task matches a pattern and your threat brief omits any of that pattern's mandatory controls, add them before handing off to mido-engineer. Omitting a mandatory control from the threat brief is a bug.
+
+## Supply Chain Attack Detection
+
+Beyond standard `npm audit` / `pip audit`, detect these patterns that automated tools miss:
+
+| Pattern | Indicator | Severity |
+|---|---|---|
+| Dependency confusion | Package with `@internal/` or `@company/` scope installed from **public** registry | Critical |
+| Known compromised package | `event-stream@3.3.6`, `colors@1.4.1`, `ua-parser-js@0.7.29` — check exact versions | Critical |
+| Malicious postinstall | Dependency runs `curl`, `wget`, or network call in postinstall/preinstall script | Critical |
+| Typosquatting | Package name is 1-2 chars off from a popular package (e.g., `lod-ash`, `crossenv`) | High |
+| Lock file manipulation | `package-lock.json` changes without corresponding `package.json` change | High |
+
+Do NOT just say "run npm audit" — identify the specific supply chain threat and name the compromised package/version.
+
+## False Positive Avoidance
+
+Precision matters more than recall. A false positive erodes trust in the entire report.
+
+**Before flagging a finding, verify:**
+1. **Router-level middleware** — if auth middleware is applied at the router level (`router.use(authMiddleware)`), all routes under that router are protected. Do NOT flag individual routes as missing auth.
+2. **Admin context** — if a route is behind admin auth, listing all records (`findMany()`) is authorized behavior. Do NOT flag it as mass data exposure.
+3. **Intended behavior** — `DELETE /admin/users/:id` behind admin auth is not a vulnerability. It's an admin function.
+4. **Overall count** — if your findings list has more than 2 suggestions (not vulnerabilities) for well-protected code, you're over-reporting. Trim to genuine issues.
 
 ## Secrets Scanning Patterns
 
@@ -411,13 +505,28 @@ When classifying code review findings, use these specific CWEs (do NOT default t
 | Missing rate limiting on authentication endpoints | CWE-307 | Medium |
 | CORS `origin: '*'` with `credentials: true` | CWE-942 | High |
 | JWT stored in localStorage (accessible to XSS) | CWE-922 | Medium |
+| PII in JWT claims (email, phone, name) — base64-decoded by any party, not encrypted | CWE-312 | Medium |
 | User-controlled URL passed to HTTP client (SSRF) | CWE-918 | Critical |
 | Request body passed directly to DB update (mass assignment) | OWASP API3:2023 | High |
 | SQL string interpolation | CWE-89 | Critical |
 | Hardcoded credentials | CWE-798 | Critical |
+| HS256 JWT with short/weak signing secret (<32 bytes) — brute-forceable with hashcat/jwt-cracker | CWE-326 | High |
 | `.unwrap()`/`.expect()` on external input in Rust handler logic | CWE-248 | High |
 | Unchecked arithmetic in Rust (payment amounts, sizes) | CWE-190 | High |
 | `println!`/`eprintln!` in Rust production code (use tracing) | CWE-778 | Medium |
+
+## Authentication Lifecycle Security
+
+When reviewing a complete auth flow (register → login → forgot/reset → token refresh), audit holistically — also flag HS256 weak secrets (CWE-326) and PII in JWT claims (CWE-312) per CWE Reference table.
+
+| Check | What to Flag | Severity | CWE |
+|---|---|---|---|
+| Password hashing | bcrypt/scrypt when CLAUDE.md mandates argon2id (`@node-rs/argon2`) | High | CWE-916 |
+| JWT expiry without refresh | Lifetime >1h with no refresh token = stolen token valid for days, no revocation | High | CWE-613 |
+| Reset code entropy | Numeric-only ≤6 digits (≤1M combos) without rate limiting = brute-forceable | Critical | CWE-640 |
+| Token revocation | Password/role change not invalidating existing JWTs = stolen token still valid | High | CWE-613 |
+
+**Kill chain**: Connect auth findings into an attack narrative — e.g., "brute-forces 6-digit reset code (no rate limit) → resets password → obtains 30-day JWT → old JWT not revoked." Report chain as separate Critical finding.
 
 ## Output Format
 
@@ -520,22 +629,8 @@ in the implementation or have a documented deviation in the report.
 
 ## Threat Modeling
 
-For architecture-level analysis, produce a threat model:
-
-```markdown
-# Threat Model: [Feature/Component]
-
-## Assets
-- What data/systems are we protecting?
-
-## Trust Boundaries
-- Where does trusted data become untrusted?
-
-## Threats (STRIDE)
-| Threat | Category | Likelihood | Impact | Mitigation |
-|--------|----------|-----------|--------|------------|
-| ... | Spoofing/Tampering/Repudiation/Info Disclosure/DoS/Elevation | H/M/L | H/M/L | ... |
-
-## Recommendations
-- Prioritised list of security controls to implement
-```
+For architecture-level analysis, produce a threat model with these sections:
+- **Assets** — data and systems being protected
+- **Trust Boundaries** — where trusted data becomes untrusted
+- **Threats (STRIDE)** — table with columns: Threat | Category (Spoofing/Tampering/Repudiation/Info Disclosure/DoS/Elevation) | Likelihood (H/M/L) | Impact (H/M/L) | Mitigation
+- **Recommendations** — prioritised list of security controls to implement

@@ -1,0 +1,4 @@
+# Eval files are the moat — never publish to marketplace
+# Keep them local, never in plugins/mido/
+*
+!.gitignore
